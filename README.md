@@ -26,17 +26,16 @@ UrbanPulse unifies traffic, weather, and health data into a **3D Digital Twin** 
 
 ## Installation Instructions
 
-1. **Unzip the project folder.**
-2. **Open your terminal/command prompt** in this folder.
-3. **Install the required libraries** by running:
+1. **Clone this repository**:
+   git clone https://github.com/Ngzx0312/C3G8_CodingKawKaw0299_SourceCode
+   cd C3G8_CodingKawKaw0299_SourceCode
+2. **Install the dependencies**:
    pip install -r requirements.txt
-
-## How to run the app
-Run the Streamlit Dashboard:
-
-streamlit run app.py
+3. **Run the Streamlit Dashboard**:
+   streamlit run app.py
 
 *"Source code attached. For a quick demo, you can view the live version here: [https://urbanpulse-xihackathon-lr2jpbmsdrgqtbh54vtra8.streamlit.app/]"*
+
 
 
 
