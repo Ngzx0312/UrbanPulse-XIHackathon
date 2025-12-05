@@ -138,7 +138,8 @@ LOCATIONS = {
 # --- 4. ENGINES ---
 class UrbanPulseAI:
     def __init__(self):
-        # [ROBUSTNESS CHECK] If models are missing, train them instantly (from Github version)
+        # [CRITICAL UPDATE] If models don't exist, TRAIN THEM INSTANTLY.
+        # This removes the dependency on external .pkl files.
         if not os.path.exists("model_stress.pkl"):
             self.emergency_train()
             
@@ -148,23 +149,26 @@ class UrbanPulseAI:
             with open("encoder.pkl", "rb") as f: self.le = pickle.load(f)
             self.loaded = True
         except:
-            self.loaded = False
+            # Last resort fallback if loading fails even after training
+            self.emergency_train()
+            with open("model_stress.pkl", "rb") as f: self.stress_model = pickle.load(f)
+            with open("model_roi.pkl", "rb") as f: self.roi_model = pickle.load(f)
+            with open("encoder.pkl", "rb") as f: self.le = pickle.load(f)
+            self.loaded = True
 
     def emergency_train(self):
         """
-        Hackathon Fix: Trains a lightweight model on the fly if files are missing.
-        This allows deployment without uploading large .pkl files.
+        Generates synthetic data and trains models on the fly.
         """
-        print("⚠️ Models missing. Initiating Emergency Training Protocol...")
-        
         # 1. Generate Lightweight Data
         data = []
         districts = {
             "Bukit Bintang": {"density": 11000, "base_traffic": 8500},
             "Cheras":        {"density": 9500,  "base_traffic": 7000},
-            "Bangsar":       {"density": 6500,  "base_traffic": 5500},
+            "Lembah Pantai": {"density": 6500,  "base_traffic": 5500}, # Updated to match keys
         }
         
+        # Create 1000 synthetic rows
         for _ in range(1000):
             dist_name = np.random.choice(list(districts.keys()))
             profile = districts[dist_name]
@@ -188,19 +192,21 @@ class UrbanPulseAI:
             
         df = pd.DataFrame(data, columns=["district", "traffic", "weather", "intervention", "density", "stress", "roi"])
         
-        # 2. Train
+        # 2. Train Models
         le = LabelEncoder()
-        df['district_code'] = le.fit_transform(df['district'])
+        # Note: We fit on the keys from LOCATIONS to ensure all districts are known
+        le.fit(list(districts.keys()) + ["Bangsar"]) 
+        df['district_code'] = le.transform(df['district'])
+        
         X = df[["traffic", "weather", "intervention", "density", "district_code"]]
         
-        m_stress = RandomForestRegressor(n_estimators=10).fit(X, df["stress"])
-        m_roi = RandomForestRegressor(n_estimators=10).fit(X, df["roi"])
+        m_stress = RandomForestRegressor(n_estimators=10, random_state=42).fit(X, df["stress"])
+        m_roi = RandomForestRegressor(n_estimators=10, random_state=42).fit(X, df["roi"])
         
-        # 3. Save
+        # 3. Save to local session
         with open("model_stress.pkl", "wb") as f: pickle.dump(m_stress, f)
         with open("model_roi.pkl", "wb") as f: pickle.dump(m_roi, f)
         with open("encoder.pkl", "wb") as f: pickle.dump(le, f)
-        print("✅ Emergency Training Complete.")
 
     def predict(self, loc_data, intervention_code):
         if not self.loaded: return 0,0,0, {}
@@ -229,8 +235,13 @@ class UrbanPulseAI:
         
         # 2. AI PREDICTION FOR HEALTH
         ml_i_code = i_code if i_code <= 3 else 0 
-        try: dist_code = self.le.transform([loc_data["district"]])[0]
-        except: dist_code = 0
+        
+        # Handle District Encoding safely
+        try: 
+            dist_code = self.le.transform([loc_data["district"]])[0]
+        except: 
+            # Fallback if district name doesn't match training data
+            dist_code = 0 
         
         inputs = pd.DataFrame([[avg_traffic, 1, ml_i_code, loc_data["density"], dist_code]], 
                               columns=["traffic", "weather", "intervention", "density", "district_code"])
@@ -273,12 +284,13 @@ class UrbanPulseAI:
             breakdown["❄️ Urban Cooling & Property Uplift"] = cooling_roi
         
         return round(stress, 1), round(total_roi, 2), int(avg_traffic), breakdown
+    
+# --- REPLACEMENT FOR SeaLionBrain CLASS ---
 
-# --- 5. SEA_LION AI COPILOT (Advanced RAG Version) ---
 class SeaLionBrain:
     def __init__(self):
         # 1. API KEY
-        self.api_key = "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" 
+        self.api_key = "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"  # <--- PASTE YOUR KEY HERE
         
         # 2. REAL POLICY CONTEXT (The "Legitimate Source")
         self.policy_library = {
@@ -413,6 +425,7 @@ class SeaLionBrain:
                 temperature=0.5, # Higher creativity for "comments"
                 response_format={"type": "json_object"} 
             )
+            # Parse JSON
             import json
             return json.loads(chat_completion.choices[0].message.content)
         except:
@@ -421,7 +434,7 @@ class SeaLionBrain:
 math_engine = UrbanPulseAI()
 ai_brain = SeaLionBrain()
 
-# --- 6. LAYOUT & LOGIC ---
+# --- 5. LAYOUT & LOGIC ---
 if 'active_tool' not in st.session_state: st.session_state.active_tool = "None"
 
 # HEADER ROW
@@ -472,6 +485,7 @@ with col_sidebar:
     st.markdown("---")
     st.caption("Data Sources: MetMalaysia, OpenDOSM, MOH")
 
+
 # --- RIGHT PANEL (VISUALIZATION) ---
 with col_main:
     curr = st.session_state.active_tool
@@ -490,9 +504,16 @@ with col_main:
         
         # TIME HORIZON LOGIC (Apply Multipliers)
         if time_horizon > 1:
+            # Simple compounding logic for the Hackathon
             multiplier = time_horizon
-            if curr == "Trees": multiplier = time_horizon * 1.2 
-            if curr == "Flyover": multiplier = time_horizon * 0.8 
+            
+            # Trees grow = Exponential value (Cooling gets better)
+            if curr == "Trees": 
+                multiplier = time_horizon * 1.2 
+            
+            # Flyovers degrade = High maintenance cost reduces long-term ROI
+            if curr == "Flyover": 
+                multiplier = time_horizon * 0.8 
             
             # Update the ROI 'r' and the Breakdown 'bd'
             r = round(r * multiplier, 2)
@@ -506,20 +527,40 @@ with col_main:
                 curr, 
                 s, 
                 r, 
-                loc_data["density"],
-                loc_data["source"]
+                loc_data["density"],  # <--- NEW
+                loc_data["source"]    # <--- NEW
             )
         else:
             ai_msg = "Models missing."
 
-    # KPIS ROW
+    # KPIS ROW (Styled Cards)
     k1, k2, k3 = st.columns(3)
-    k1.metric("Community Stress", f"{s}/100", delta=f"{round(s - 85, 1)} vs Baseline", delta_color="inverse")
     
+    # 1. Stress Score (Lower is Better)
+    k1.metric(
+        "Community Stress", 
+        f"{s}/100", 
+        delta=f"{round(s - 85, 1)} vs Baseline", # Shows change from 85
+        delta_color="inverse" # INVERSE: Negative (drop) is Green, Positive (rise) is Red
+    )
+    
+    # 2. Traffic Volume (Lower is Better)
     traffic_change = t - loc_data["base_traffic"]
-    k2.metric("Traffic Volume", f"{t} /hr", delta=f"{traffic_change} /hr", delta_color="inverse")
+    k2.metric(
+        "Traffic Volume", 
+        f"{t} /hr", 
+        delta=f"{traffic_change} /hr", 
+        delta_color="inverse" 
+    )
     
-    k3.metric("Health ROI", f"RM {r} M", delta="Annual Projected Savings", delta_color="normal")
+    # 3. Health ROI (Higher is Better)
+    roi_label = "Annual Savings" if r >= 0 else "Annual Cost/Deficit"
+    k3.metric(
+        "Health ROI", 
+        f"RM {r} M", 
+        delta=f"{r} M ({roi_label})",
+        delta_color="normal" # NORMAL: Positive is Green (Money gained is good)
+    )
     
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -533,38 +574,48 @@ with col_main:
             
             # "City Block" effect
             df_map = pd.DataFrame({
-                'lat': [lat + np.random.normal(0, 0.001) for _ in range(200)], 
+                'lat': [lat + np.random.normal(0, 0.001) for _ in range(200)], # 0.001 = tighter cluster
                 'lon': [lon + np.random.normal(0, 0.001) for _ in range(200)],
-                'val': [s * np.random.uniform(0.8, 1.2) for _ in range(200)] 
+                'val': [s * np.random.uniform(0.8, 1.2) for _ in range(200)] # Varies height slightly
             })
 
-            r = 255 if s > 60 else 0
-            g = 255 if s <= 60 else 50
+            # Color Logic: Red (High Stress) vs Green (Low Stress)
+            r_col = 255 if s > 60 else 0
+            g_col = 255 if s <= 60 else 50
             
             layer = pdk.Layer(
                 "ColumnLayer",
                 data=df_map,
                 get_position='[lon, lat]',
-                get_elevation='val',
-                elevation_scale=10, 
-                radius=25, 
-                get_fill_color=[r, g, 50, 180],
-                extruded=True,
+                get_elevation='val',        # Height based on Stress Score
+                elevation_scale=10,         # [CRITICAL] Multiplier to make them tall
+                radius=25,                  # Thickness of the bars
+                get_fill_color=[r_col, g_col, 50, 180],
+                extruded=True,              # Forces 3D rendering
                 pickable=True,
                 auto_highlight=True,
             )
 
-            view_state = pdk.ViewState(latitude=lat, longitude=lon, zoom=15.5, pitch=60, bearing=30)
+            # [FIX 3] Adjust View State to look "closer"
+            view_state = pdk.ViewState(
+                latitude=lat, 
+                longitude=lon, 
+                zoom=15.5,    # Zoomed in closer
+                pitch=60,     # Steep angle for 3D effect
+                bearing=30
+            )
             
+            # Render with a specific key to force Streamlit to redraw
             st.pydeck_chart(pdk.Deck(
                 layers=[layer],
                 initial_view_state=view_state,
                 tooltip={"text": "Impact Intensity: {val}"},
                 map_style=pdk.map_styles.CARTO_DARK
-            ), key=f"map_{curr}_{selected_loc_name}")
+            ), key=f"map_{curr}_{selected_loc_name}") # Unique key forces refresh
         
         with mc2:
             st.markdown("#### 🤖 AI Policy Audit")
+            # Use the AI message (Backup or Real)
             st.markdown(f"<div class='ai-box'><b>Analisis SEA-LION:</b><br>{ai_msg}</div>", unsafe_allow_html=True)
             
             if curr == "Flyover":
@@ -577,8 +628,10 @@ with col_main:
     
     with tab_detail:
         # [NEW] AI SENTIMENT CALL
+        # We call this only when the tab is loaded to save resources
         sentiment_data = ai_brain.forecast_sentiment(curr, loc_data["district"])
         
+        # ROW 1: DEMOGRAPHICS & LEDGER
         c_dem, c_fin = st.columns(2)
         with c_dem:
             st.markdown("#### 👥 Demographic Impact")
@@ -606,9 +659,11 @@ with col_main:
         vp1, vp2 = st.columns([1, 2])
         
         with vp1:
+            # Approval Rating Metric
             approval = sentiment_data['approval']
             st.metric("Project Approval Rating", f"{approval}%", delta="Predicted Support", delta_color="normal" if approval > 50 else "inverse")
             
+            # Progress Bar for Visual Impact
             if approval > 70: color = "green"
             elif approval > 40: color = "orange"
             else: color = "red"
@@ -616,5 +671,6 @@ with col_main:
             st.caption(f"Sentiment: **{sentiment_data['sentiment']}**")
             
         with vp2:
+            # "Social Media Comment" Simulation
             st.info(f"💬 **Top Trending Community Comment:**\n\n\"{sentiment_data['top_comment']}\"")
             st.markdown("*Analysis based on historical social sentiment data from similar KL districts.*")
